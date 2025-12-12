@@ -6,7 +6,7 @@ import { VideoPlayer } from '../components/VideoPlayer';
 import { motion, AnimatePresence } from 'framer-motion';
 import {
     Mic, MicOff, Video as VideoIcon, VideoOff,
-    PhoneOff, Copy, Users, Check, Settings, MoreHorizontal, Share2,
+    PhoneOff, Copy, Users, Check, Settings, Share2,
     Monitor, MessageSquare, Send, X
 } from 'lucide-react';
 
@@ -573,8 +573,8 @@ const Room = () => {
                             {messages.map((msg, i) => (
                                 <div key={i} className={`flex flex-col ${msg.sender === (isHost ? 'Host' : 'Guest') ? 'items-end' : 'items-start'}`}>
                                     <div className={`max-w-[85%] rounded-2xl px-4 py-2 ${msg.sender === (isHost ? 'Host' : 'Guest')
-                                            ? 'bg-blue-600 text-white rounded-tr-none'
-                                            : 'bg-white/10 text-white rounded-tl-none'
+                                        ? 'bg-blue-600 text-white rounded-tr-none'
+                                        : 'bg-white/10 text-white rounded-tl-none'
                                         }`}>
                                         <p className="text-sm">{msg.text}</p>
                                     </div>
