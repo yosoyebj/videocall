@@ -46,6 +46,7 @@ const Room = () => {
     const pendingCallsRef = useRef<MediaConnection[]>([]);
     const receivedStreamRef = useRef(false);
     const controlsTimeoutRef = useRef<any>(null);
+    const [connectionMode, setConnectionMode] = useState<string>(''); // STUN, TURN, or P2P
 
     // Auto-hide controls
     useEffect(() => {
@@ -162,8 +163,9 @@ const Room = () => {
                             callAttempts++;
                             try {
                                 if (!guestStreamRef.current) {
-                                    const guestStream = await navigator.mediaDevices.getUserMedia({ video: false, audio: true });
-                                    guestStream.getTracks().forEach(track => { track.enabled = false; });
+                                    // Fix: Request video for guest as well
+                                    const guestStream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+                                    setMyStream(guestStream); // Allow guest to see themselves
                                     guestStreamRef.current = guestStream;
                                 }
 
@@ -215,35 +217,70 @@ const Room = () => {
     }, [roomId]);
 
     const handleCall = (call: MediaConnection) => {
+        // Start monitoring connection stats
+        const checkStats = () => {
+            if (!call.peerConnection) return;
+            call.peerConnection.getStats().then(stats => {
+                stats.forEach(report => {
+                    if (report.type === 'candidate-pair' && report.state === 'succeeded') {
+                        const localCandidate = stats.get(report.localCandidateId);
+                        // const remoteCandidate = stats.get(report.remoteCandidateId);
+
+                        if (localCandidate) {
+                            if (localCandidate.candidateType === 'host') setConnectionMode('P2P (Local)');
+                            else if (localCandidate.candidateType === 'srflx') setConnectionMode('STUN (Direct)');
+                            else if (localCandidate.candidateType === 'relay') setConnectionMode('TURN (Relay)');
+                            else setConnectionMode(localCandidate.candidateType.toUpperCase());
+                        }
+                    }
+                });
+            });
+        };
+
+        const statsInterval = setInterval(checkStats, 2000);
+
         call.on('stream', (remoteStream) => {
-            if (remoteStream.getTracks().length === 0) return;
+            console.log(`[Peer] Received stream from ${call.peer}`, remoteStream.getTracks());
+            if (remoteStream.getTracks().length === 0) {
+                console.warn('[Peer] Received stream with no tracks');
+                return;
+            }
             if (!isHost) receivedStreamRef.current = true;
             setRemoteStreams(prev => {
-                if (prev.find(p => p.peerId === call.peer)) return prev;
+                if (prev.find(p => p.peerId === call.peer)) {
+                    console.log('[Peer] Stream already exists for', call.peer);
+                    return prev;
+                }
+                console.log('[Peer] Adding new remote stream for', call.peer);
                 const updated = [...prev, { peerId: call.peer, stream: remoteStream }];
                 if (!isHost) setStatus('Connected');
                 return updated;
             });
         });
         call.on('close', () => {
+            clearInterval(statsInterval);
+            setConnectionMode('');
             setRemoteStreams(prev => prev.filter(p => p.peerId !== call.peer));
             if (!isHost) setStatus('Stream ended');
         });
         call.on('error', () => {
+            clearInterval(statsInterval);
             if (!isHost) setStatus('Connection error');
         });
     };
 
     const toggleMute = () => {
-        if (myStreamRef.current) {
-            myStreamRef.current.getAudioTracks().forEach(track => { track.enabled = !track.enabled; });
+        const stream = myStreamRef.current || guestStreamRef.current;
+        if (stream) {
+            stream.getAudioTracks().forEach(track => { track.enabled = !track.enabled; });
             setIsMuted(!isMuted);
         }
     };
 
     const toggleVideo = () => {
-        if (myStreamRef.current) {
-            myStreamRef.current.getVideoTracks().forEach(track => { track.enabled = !track.enabled; });
+        const stream = myStreamRef.current || guestStreamRef.current;
+        if (stream) {
+            stream.getVideoTracks().forEach(track => { track.enabled = !track.enabled; });
             setIsVideoOff(!isVideoOff);
         }
     };
@@ -293,6 +330,17 @@ const Room = () => {
                             <span className="text-sm font-medium text-white/80">{status}</span>
                             <div className="w-px h-4 bg-white/10 mx-1" />
                             <span className="text-xs font-mono text-white/40">{roomId.slice(0, 8)}...</span>
+                            {connectionMode && (
+                                <>
+                                    <div className="w-px h-4 bg-white/10 mx-1" />
+                                    <div className={`px-2 py-0.5 rounded text-[10px] font-bold uppercase tracking-wider ${connectionMode.includes('TURN') ? 'bg-purple-500/20 text-purple-400 border border-purple-500/30' :
+                                            connectionMode.includes('STUN') ? 'bg-blue-500/20 text-blue-400 border border-blue-500/30' :
+                                                'bg-green-500/20 text-green-400 border border-green-500/30'
+                                        }`}>
+                                        {connectionMode}
+                                    </div>
+                                </>
+                            )}
                         </div>
 
                         <div className="pointer-events-auto flex items-center gap-2">
@@ -313,26 +361,25 @@ const Room = () => {
                 <div className={`grid ${gridCols} gap-4 w-full max-w-[1600px] h-full max-h-[90vh] transition-all duration-700 ease-[cubic-bezier(0.16,1,0.3,1)]`}>
 
                     {/* My Video (Host Only) */}
-                    {isHost && (
-                        <motion.div
-                            layout
-                            initial={{ opacity: 0, scale: 0.9 }}
-                            animate={{ opacity: 1, scale: 1 }}
-                            className="relative rounded-3xl overflow-hidden bg-[#111] border border-white/5 shadow-2xl group"
-                        >
-                            {myStream ? (
-                                <VideoPlayer stream={myStream} muted={true} className="w-full h-full object-cover" />
-                            ) : (
-                                <div className="w-full h-full flex items-center justify-center">
-                                    <div className="w-12 h-12 border-2 border-white/20 border-t-white rounded-full animate-spin" />
-                                </div>
-                            )}
-                            <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
-                                <span>You</span>
-                                {isMuted && <MicOff className="w-3 h-3 text-red-400" />}
+                    {/* My Video (Visible to both Host and Guest) */}
+                    <motion.div
+                        layout
+                        initial={{ opacity: 0, scale: 0.9 }}
+                        animate={{ opacity: 1, scale: 1 }}
+                        className="relative rounded-3xl overflow-hidden bg-[#111] border border-white/5 shadow-2xl group"
+                    >
+                        {myStream ? (
+                            <VideoPlayer stream={myStream} muted={true} className="w-full h-full object-cover" />
+                        ) : (
+                            <div className="w-full h-full flex items-center justify-center">
+                                <div className="w-12 h-12 border-2 border-white/20 border-t-white rounded-full animate-spin" />
                             </div>
-                        </motion.div>
-                    )}
+                        )}
+                        <div className="absolute bottom-4 left-4 bg-black/60 backdrop-blur-md px-3 py-1.5 rounded-lg text-sm font-medium flex items-center gap-2 opacity-0 group-hover:opacity-100 transition-opacity">
+                            <span>You</span>
+                            {isMuted && <MicOff className="w-3 h-3 text-red-400" />}
+                        </div>
+                    </motion.div>
 
                     {/* Remote Videos */}
                     {remoteStreams.map((remote) => (
@@ -394,23 +441,19 @@ const Room = () => {
                         className="fixed bottom-6 md:bottom-8 left-1/2 -translate-x-1/2 z-50 w-[90%] md:w-auto max-w-md md:max-w-none"
                     >
                         <div className="glass-panel p-2 rounded-2xl shadow-2xl flex items-center justify-between md:justify-center gap-2 md:gap-4 overflow-x-auto no-scrollbar">
-                            {isHost && (
-                                <>
-                                    <button
-                                        onClick={toggleMute}
-                                        className={`w-12 h-12 btn-icon ${isMuted ? 'bg-red-500/20 text-red-500' : ''}`}
-                                    >
-                                        {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
-                                    </button>
-                                    <button
-                                        onClick={toggleVideo}
-                                        className={`w-12 h-12 btn-icon ${isVideoOff ? 'bg-red-500/20 text-red-500' : ''}`}
-                                    >
-                                        {isVideoOff ? <VideoOff className="w-5 h-5" /> : <VideoIcon className="w-5 h-5" />}
-                                    </button>
-                                    <div className="w-px h-6 bg-white/10 mx-1" />
-                                </>
-                            )}
+                            <button
+                                onClick={toggleMute}
+                                className={`w-12 h-12 btn-icon ${isMuted ? 'bg-red-500/20 text-red-500' : ''}`}
+                            >
+                                {isMuted ? <MicOff className="w-5 h-5" /> : <Mic className="w-5 h-5" />}
+                            </button>
+                            <button
+                                onClick={toggleVideo}
+                                className={`w-12 h-12 btn-icon ${isVideoOff ? 'bg-red-500/20 text-red-500' : ''}`}
+                            >
+                                {isVideoOff ? <VideoOff className="w-5 h-5" /> : <VideoIcon className="w-5 h-5" />}
+                            </button>
+                            <div className="w-px h-6 bg-white/10 mx-1" />
 
                             <button className="btn-icon">
                                 <Settings className="w-5 h-5" />
