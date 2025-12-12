@@ -66,13 +66,43 @@ const Room = () => {
         if (!roomId) return;
 
         const init = async () => {
+            let iceServers = [];
+
+            // Fetch ICE servers from our backend (which handles Xirsys auth)
+            try {
+                const response = await fetch('/api/ice-servers');
+                iceServers = await response.json();
+            } catch (err) {
+                console.error('Failed to fetch ICE servers:', err);
+                // Fallback to free STUN if API fails
+                iceServers = [
+                    { urls: 'stun:stun.l.google.com:19302' },
+                    { urls: 'stun:global.stun.twilio.com:3478' }
+                ];
+            }
+
             const peer = new Peer(roomId, {
                 config: {
-                    iceServers: [
-                        { urls: 'stun:stun.l.google.com:19302' },
-                        { urls: 'stun:global.stun.twilio.com:3478' }
-                    ]
-                }
+                    iceServers: iceServers
+                },
+                debug: 2 // Log errors and warnings
+            });
+
+            // Instrumentation helper
+            const logEvent = (event: string, data?: any) => {
+                console.log(`[Calmoraa Analytics] ${event}`, data || '');
+                // TODO: Send to your observability stack (e.g., PostHog, Sentry)
+            };
+
+            peer.on('disconnected', () => {
+                logEvent('Peer disconnected');
+                setStatus('Disconnected. Reconnecting...');
+                peer.reconnect();
+            });
+
+            peer.on('close', () => {
+                logEvent('Peer closed');
+                setStatus('Connection closed');
             });
 
             peer.on('open', async (id) => {
@@ -109,15 +139,14 @@ const Room = () => {
             });
 
             peer.on('error', (err: any) => {
+                logEvent('Peer error', err);
                 if (err.type === 'unavailable-id') {
                     console.log('[Guest] Room ID taken, joining as Guest');
                     const guestPeer = new Peer({
                         config: {
-                            iceServers: [
-                                { urls: 'stun:stun.l.google.com:19302' },
-                                { urls: 'stun:global.stun.twilio.com:3478' }
-                            ]
-                        }
+                            iceServers: iceServers
+                        },
+                        debug: 2
                     });
 
                     guestPeer.on('open', async (id) => {
@@ -234,14 +263,20 @@ const Room = () => {
 
     // Grid calculation
     const totalParticipants = (isHost ? 1 : 0) + remoteStreams.length;
-    const gridCols = totalParticipants <= 1 ? 'grid-cols-1' : totalParticipants <= 4 ? 'grid-cols-2' : 'grid-cols-3';
+    const gridCols = totalParticipants <= 1
+        ? 'grid-cols-1'
+        : totalParticipants === 2
+            ? 'grid-cols-1 md:grid-cols-2'
+            : totalParticipants <= 4
+                ? 'grid-cols-2'
+                : 'grid-cols-2 md:grid-cols-3';
 
     return (
         <div className="min-h-screen bg-black text-white overflow-hidden relative">
             {/* Aurora Background (Subtle) */}
             <div className="absolute inset-0 opacity-30 pointer-events-none">
-                <div className="absolute top-[-20%] left-[-10%] w-[800px] h-[800px] bg-blue-900/20 rounded-full blur-[120px]" />
-                <div className="absolute bottom-[-20%] right-[-10%] w-[800px] h-[800px] bg-purple-900/20 rounded-full blur-[120px]" />
+                <div className="absolute top-[-20%] left-[-10%] w-[800px] h-[800px] bg-primary/20 rounded-full blur-[120px]" />
+                <div className="absolute bottom-[-20%] right-[-10%] w-[800px] h-[800px] bg-secondary/20 rounded-full blur-[120px]" />
             </div>
 
             {/* Header */}
@@ -356,9 +391,9 @@ const Room = () => {
                         initial={{ opacity: 0, y: 20 }}
                         animate={{ opacity: 1, y: 0 }}
                         exit={{ opacity: 0, y: 20 }}
-                        className="fixed bottom-8 left-1/2 -translate-x-1/2 z-50"
+                        className="fixed bottom-6 md:bottom-8 left-1/2 -translate-x-1/2 z-50 w-[90%] md:w-auto max-w-md md:max-w-none"
                     >
-                        <div className="glass-panel p-2 rounded-2xl shadow-2xl flex items-center gap-2">
+                        <div className="glass-panel p-2 rounded-2xl shadow-2xl flex items-center justify-between md:justify-center gap-2 md:gap-4 overflow-x-auto no-scrollbar">
                             {isHost && (
                                 <>
                                     <button
@@ -386,7 +421,7 @@ const Room = () => {
 
                             <button
                                 onClick={leaveRoom}
-                                className="btn btn-primary h-12 px-6 ml-2"
+                                className="btn h-12 px-6 ml-2 bg-red-500 hover:bg-red-600 text-white shadow-lg shadow-red-500/20"
                             >
                                 <PhoneOff className="w-5 h-5" />
                                 <span className="hidden sm:inline">End</span>
